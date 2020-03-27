@@ -27,6 +27,12 @@ unstim.s <- CreateSeuratObject(t(unstim))
 stim.s$stim <- "stim"
 unstim.s$stim <- "unstim"
 
+# Loading 10x Healthy control
+don_c_10x_HC = Read10X(data.dir = "../DH010101_WTA_unstim_and_stim/filtered_matrices_mex_c/hg19/")
+tenx_HC_c.s <- CreateSeuratObject(don_c_10x_HC)
+tenx_HC_c.s$stim <- "10x_HC_c"
+
+
 # Merge datasets, no batch correction
 comb <- merge(stim.s, unstim.s, add.cell.ids = c("stim", "unstim"))
 comb <- FindVariableFeatures(comb)
@@ -100,6 +106,10 @@ for (ref.set in names(singler$singler) ) {
 
 p1 <- DimPlot(data, group.by = "bpe_type", split.by = "stim", label = T)
 plot_grid(p1)
+
+### Annotate features of Interest
+FeaturePlot(data, features = "IL1B", split.by = "stim")
+
 
 ### Instead of Seurat SCTransform, attempt Harmony
 ```{r}
