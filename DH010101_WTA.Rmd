@@ -4,11 +4,16 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-library(Seurat)
+library(dplyr)
 library(ggplot2)
 library(cowplot)
+library(scater)
+
+library(Seurat)
 library(sctransform)
 library(harmony)
+library(SingleR)
+library(scRNAseq)
 ```
 
 ## Data Integration
@@ -17,9 +22,10 @@ library(harmony)
 
 ```{r}
 setwd("~/maggie.fu/Projects/Turvey/scRNAseq/")
+options(future.globals.maxSize = 4000 * 1024^2)
 
-stim <- read.csv("stim_RSEC_MolsPerCell_WTA.csv", skip = 7, row.names = 1)
-unstim <- read.csv("unstim_RSEC_MolsPerCell_WTA.csv", skip = 7, row.names = 1)
+stim <- read.csv("data/stim_RSEC_MolsPerCell_WTA.csv", skip = 7, row.names = 1)
+unstim <- read.csv("data/unstim_RSEC_MolsPerCell_WTA.csv", skip = 7, row.names = 1)
 
 stim.s <- CreateSeuratObject(t(stim))
 unstim.s <- CreateSeuratObject(t(unstim))
@@ -29,6 +35,7 @@ unstim.s$stim <- "unstim"
 
 # Merge datasets, no batch correction
 comb <- merge(stim.s, unstim.s, add.cell.ids = c("stim", "unstim"))
+#comb <- data
 comb <- FindVariableFeatures(comb)
 comb <- ScaleData(comb)
 comb <- RunPCA(comb, npcs = 30)
@@ -41,19 +48,22 @@ plot_grid(p1, p2)
 
 # Data normalization and subset for variable (highly dispersed) features
 comb <- merge(stim.s, unstim.s, add.cell.ids = c("stim", "unstim"))
+head(comb@meta.data)
+
+data.list <- SplitObject(comb, split.by = "stim")
 data.list <- lapply(data.list, function(x) {
-    #x <- SCTransform(x, variable.features.n = 20000, return.only.var.genes = F, verbose = F) # Find variable features this time, for plotting purposes. For batch correction of the whole dataset, repeat from this step with lower variability threshold or full list of genesNormalizeData(pancreas.list[[i]], verbose = FALSE)
+    SCTransform(x, variable.features.n = 2000, return.only.var.genes = F, verbose = F) # Find variable features this time, for plotting purposes. For batch correction of the whole dataset, repeat from this step with lower variability threshold or full list of genesNormalizeData(pancreas.list[[i]], verbose = FALSE)
     # I cannot manage to keep all features with SCTransform. Try to go back to the standard pipeline
-    NormalizeData(x, verbose = F)
-    FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000, verbose = F)
+    #NormalizeData(x, verbose = F)
+    #FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000, verbose = F)
 })
 
 # Find anchors
-#data.features <- SelectIntegrationFeatures(data.list)
-#data.list <- PrepSCTIntegration(data.list, anchor.features = data.features)
-anchors <- FindIntegrationAnchors(object.list = data.list)
-                                  #anchor.features = data.features,
-                                  #normalization.method = "SCT")
+data.features <- SelectIntegrationFeatures(data.list)
+data.list <- PrepSCTIntegration(data.list, anchor.features = data.features)
+anchors <- FindIntegrationAnchors(object.list = data.list,
+                                  anchor.features = data.features,
+                                  normalization.method = "SCT")
 genes <- intersect(rownames(data.list[[1]]), rownames(data.list[[2]]))
 
 # Integrate not just the anchor but all genes
@@ -71,6 +81,19 @@ p1 <- DimPlot(data, group.by = "stim")
 p2 <- DimPlot(data, label = T)
 plot_grid(p1, p2)
 DimPlot(data, split.by = "stim")
+FeaturePlot(data, features = c("IL7R", "NKG7", "LYZ", "MS4A1")) # Tcell, NK, Monocytes, Bcell
+
+# Save output
+data.qc <- as.SingleCellExperiment(data, assay = "RNA") # convert to singlecellexperiment object for singleR
+data.int <- as.SingleCellExperiment(data, assay = "integrated")
+save(data.qc, data.int, file = "stim_n_unstim_integrated.RData")
+# test <- data@assays$integrated
+# test <- test@data
+# raw <- data@assays$RNA
+# raw <- raw@data
+# write.csv(test, file = "stim_n_unstim_batch_corrected.csv") # output csv
+# write.csv(raw, file = "stim_n_unstim_qc_counts.csv")
+plotExpression(data.sce, features = "MS4A1", x = "ident") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
 ### Instead of Seurat SCTransform, attempt Harmony
@@ -88,20 +111,150 @@ DimPlot(object = comb, reduction = "harmony", pt.size = .1, group.by = "stim")
 # Worked very poorly - Go back to Seurat
 ```
 
-## Cell Cluster Annotation
-
-This part I am still working on
+### Integrate more control datasets from BD and GEO
 
 ```{r}
-# Identify cell type markers
-DefaultAssay(data) <- "RNA"
-nk.markers <- FindConservedMarkers(data, ident.1 = 7, grouping.var = "stim", verbose = FALSE)
-head(nk.markers)
+BDcontrol <- read.csv("data/Combined_BD-Demo-WTA-AbSeq-SMK_RSEC_MolsPerCell.csv", skip = 8, row.names = 1)
+pbmc8k <- Read10X(data.dir = "data/pbmc8k/GRCh38/")
+pbmc33k <- Read10X(data.dir = "data/pbmc33k/hg19/")
+donor_b <- Read10X(data.dir = "data/donor_b/hg19/")
+donor_c <- Read10X(data.dir = "data/donor_c/hg19/")
 
-FeaturePlot(data, features = c("CD3D", "SELL", "CREM", "CD8A", "GNLY", "CD79A", "FCGR3A", "CCL2", "PPBP"), min.cutoff = "q9")
-data <- RenameIdents(data, `0` = "CD14 Mono", `1` = "CD4 Naive T", `2` = "CD4 Memory T", `3` = "CD16 Mono", `4` = "B", `5` = "CD8 T", `6` = "T activated", `7` = "NK", `8` = "DC", `9` = "B Activated", 
-    `10` = "Mk", `11` = "pDC", `12` = "Eryth", `13` = "Mono/Mk Doublets")
+BDcontrol.s <- CreateSeuratObject(t(BDcontrol))
+pbmc8k.s <- CreateSeuratObject(counts = pbmc8k, project = "pbmc8k", min.cells = 3, min.features = 200)
+pbmc33k.s <- CreateSeuratObject(counts = pbmc33k, project = "pbmc33k", min.cells = 3, min.features = 200)
+donor_c.s <- CreateSeuratObject(counts = donor_c, project = "donorC", min.cells = 3, min.features = 200)
 
-DimPlot(data, label = TRUE)
+# Merge datasets
+comb <- merge(stim.s, unstim.s, add.cell.ids = c("stim", "unstim"))
+comb2 <- merge(BDcontrol.s, donor_c.s, add.cell.ids = c("BD", "donorC"))
+comb3 <- merge(pbmc8k.s, pbmc33k.s, add.cell.ids = c("pbmc8", "pbmc33"))
+data <- merge(comb, comb2)
+data <- merge(data, comb3)
+
+# Add labels for plotting
+data$disease <- c(rep("NFATc2", ncol(comb)), 
+                  rep("HC", ncol(data) - ncol(comb)))
+data$stim <- c(rep("stim", ncol(stim.s)), 
+               rep("unstim", ncol(data) - ncol(stim.s)))
+data$platform <- c(rep("BD", ncol(stim.s) + ncol(unstim.s) + ncol(BDcontrol.s)), 
+                   rep("TenX", ncol(donor_c.s) + ncol(pbmc8k.s) + ncol(pbmc33k.s)))
+data$frozen <- c(rep("frozen", ncol(comb)), 
+                 rep("fresh", ncol(BDcontrol.s)),
+                 rep("frozen", ncol(donor_c.s)),
+                 rep("fresh", ncol(comb3)))
+data$dataset <- gsub("_.*", "", colnames(data))
+
+#comb <- data
+test <- data %>% 
+    FindVariableFeatures(.) %>%
+    ScaleData(.) %>% 
+    RunPCA(., npcs = 30) %>% 
+    RunUMAP(., reduction = "pca", dims = 1:20) %>%
+    FindNeighbors(., reduction = "pca", dims = 1:20) %>% 
+    FindClusters(., resolution = 0.5)
+p1 <- DimPlot(test, group.by = "dataset")
+p2 <- DimPlot(test, label = T)
+plot_grid(p1, p2)
+
+# Data normalization and subset for variable (highly dispersed) features
+data.list <- SplitObject(data, split.by = "dataset")
+data.list <- lapply(data.list, function(x) {
+    #SCTransform(x, variable.features.n = 2000, return.only.var.genes = F, verbose = F) # Find variable features this time, for plotting purposes. For batch correction of the whole dataset, repeat from this step with lower variability threshold or full list of genesNormalizeData(pancreas.list[[i]], verbose = FALSE)
+    # I cannot manage to keep all features with SCTransform. Try to go back to the standard pipeline
+    x <- NormalizeData(x, verbose = F)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000, verbose = F)
+})
+
+# Find anchors
+#data.features <- SelectIntegrationFeatures(data.list)
+#data.list <- PrepSCTIntegration(data.list, anchor.features = data.features)
+anchors <- FindIntegrationAnchors(object.list = data.list)
+#                                  anchor.features = data.features,
+#                                  normalization.method = "SCT")
+genes <- intersect(rownames(data.list[[1]]), rownames(data.list[[2]])) %>%
+    intersect(., rownames(data.list[[3]])) %>%
+    intersect(., rownames(data.list[[4]])) %>%
+    intersect(., rownames(data.list[[5]])) %>%
+    intersect(., rownames(data.list[[6]]))
+
+# Integrate not just the anchor but all genes
+test <- IntegrateData(anchors, features.to.integrate = genes)
+
+# Integrated Analysis
+DefaultAssay(test) <- "integrated"
+test <- ScaleData(test) %>% 
+    RunPCA(., npcs = 30) %>%
+    RunUMAP(., reduction = "pca", dims = 1:20) %>%
+    FindNeighbors(., reduction = "pca", dims = 1:20) %>% 
+    FindClusters(., resolution = 0.5)
+
+p1 <- DimPlot(test, group.by = "dataset")
+p2 <- DimPlot(test, label = T)
+p3 <- DimPlot(test, group.by = "frozen")
+plot_grid(p1, p3)
+DimPlot(test, split.by = "stim")
+FeaturePlot(test, features = c("IL7R", "NKG7", "LYZ", "MS4A1")) # Tcell, NK, Monocytes, Bcell
+
+# Save Output
+test.qc <- as.SingleCellExperiment(test, assay = "RNA") # convert to singlecellexperiment object for singleR
+test.int <- as.SingleCellExperiment(test, assay = "integrated")
+save(test.int, file = "merged_dataset.RData")
+```
+
+
+
+
+## Cell Cluster Annotation
+
+### Reference-based annotation with SingleR
+
+```{r}
+# Predict cell types based on published reference sets
+load("stim_n_unstim_integrated.RData")
+load("merged_dataset.RData")
+
+plotExpression(test.qc, features = "MS4A1", x = "ident") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+plotExpression(test.int, features = "MS4A1", x = "ident") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+hpca.ref <- HumanPrimaryCellAtlasData()
+im.ref <- DatabaseImmuneCellExpressionData()
+nh.ref <- NovershternHematopoieticData()
+
+pred.hpca <- SingleR(test = test.int, ref = hpca.ref, labels = hpca.ref$label.main)
+pred.im <- SingleR(test = test.int, ref = im.ref, labels = im.ref$label.main)
+pred.nh <- SingleR(test = test.int, ref = nh.ref, labels = nh.ref$label.main)
+
+table(pred.hpca$labels)
+table(pred.im$labels)
+table(pred.nh$labels)
+
+identical(names(pred.hpca), data.sce)
+data.sce$pred.hpca <- pred.hpca$labels
+data.sce$pred.im <- pred.im$labels
+data.sce$pred.nh <- pred.nh$labels
+
+ct <- data.frame(cbind(Seurat = data.sce$seurat_clusters, 
+                       HPCA = data.sce$pred.hpca, 
+                       IM = data.sce$pred.im, 
+                       NH = data.sce$pred.nh))
+rownames(ct) <- colnames(data.sce)
+
+plotPCA(pred.nh, colour_by = "labels")
+CombinePlots(plots = list(p1, p2))
+```
+
+
+## Find Differentially Expressed Genes
+
+```{r}
+immune.combined$celltype.stim <- paste(Idents(immune.combined), immune.combined$stim, sep = "_")
+immune.combined$celltype <- Idents(immune.combined)
+Idents(immune.combined) <- "celltype.stim"
+b.interferon.response <- FindMarkers(immune.combined, ident.1 = "B_STIM", ident.2 = "B_CTRL", verbose = FALSE)
+head(b.interferon.response, n = 15)
+
+FeaturePlot(immune.combined, features = c("CD3D", "GNLY", "IFI6"), split.by = "stim", max.cutoff = 3, 
+    cols = c("grey", "red"))
 ```
 
