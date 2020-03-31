@@ -107,6 +107,21 @@ for (ref.set in names(singler$singler) ) {
 p1 <- DimPlot(data, group.by = "bpe_type", split.by = "stim", label = T)
 plot_grid(p1)
 
+### Labeling cell types in 10x_HCa and DH010101
+FeaturePlot(data, features = c("CD3D", "SELL", "CREM", "CD8A", "GNLY", "CD79A", "FCGR3A", "CCL2", "PPBP"), min.cutoff = "q9")
+data <- RenameIdents(data, `0` = "CD4+ T", `1` = "CD4+ Tcm", `2` = "CD4+ T", `3` = "CD8+ Tcm", `4` = "CD8+ Tem", `5` = "B cells", `6` = "CD14+ Monocytes", `7` = "NK cells", `8` = "CD16 Monocytes", `9` = "HSC", `10` = "DCs", `11` = "plasma")
+
+### Differential expression
+data$dataset <- paste(Idents(data), data$stim, sep = "_")
+data$dataset.stim <- paste(Idents(data), data$stim, sep = "_")
+data$dataset <- Idents(data)
+Idents(data) <- "dataset.stim"
+
+### example differential expression in CD4+ T cells
+cd4diff <- FindMarkers(data, ident.1 = "CD4+ T_DH010101", ident.2 = "CD4+ T_10x_HC_a", verbose = FALSE)
+head(cd4diff, n=15)
+
+
 ### Annotate features of Interest
 FeaturePlot(data, features = "IL1B", split.by = "stim")
 
