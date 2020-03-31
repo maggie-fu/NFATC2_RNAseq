@@ -33,6 +33,12 @@ unstim.s <- CreateSeuratObject(t(unstim))
 stim.s$stim <- "stim"
 unstim.s$stim <- "unstim"
 
+# Loading 10x Healthy control
+don_c_10x_HC = Read10X(data.dir = "../DH010101_WTA_unstim_and_stim/filtered_matrices_mex_c/hg19/")
+tenx_HC_c.s <- CreateSeuratObject(don_c_10x_HC)
+tenx_HC_c.s$stim <- "10x_HC_c"
+
+
 # Merge datasets, no batch correction
 comb <- merge(stim.s, unstim.s, add.cell.ids = c("stim", "unstim"))
 #comb <- data
@@ -95,6 +101,53 @@ save(data.qc, data.int, file = "stim_n_unstim_integrated.RData")
 # write.csv(raw, file = "stim_n_unstim_qc_counts.csv")
 plotExpression(data.sce, features = "MS4A1", x = "ident") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
+
+### Annotate using SingleR
+counts <- GetAssayData(data)
+
+singler <- CreateSinglerObject(counts=counts,
+  project.name="excelerate course", # choose
+  min.genes = 200, # ignore cells with fewer than 200 transcripts
+  technology = "CEL-Seq2", # choose
+  species = "Human",
+  citation = "Schelker et al. 2017", # choose
+  ref.list = list(hpca=hpca, bpe=blueprint_encode),
+  normalize.gene.length = FALSE,        # needed for full-length platforms (e.g. smartseq)
+  variable.genes = "de",  # see vignette
+  fine.tune = FALSE, # TRUE would take very long
+  reduce.file.size = TRUE, # leave out less-often used fields 
+  do.signatures = FALSE,
+  do.main.types = TRUE,
+  numCores = SingleR.numCores)
+
+for (ref.set in names(singler$singler) ) {
+  types <- singler$singler[[ref.set]]$SingleR.single.main$labels[,1]
+  data <- AddMetaData(data,
+                         metadata=types,
+                         col.name=paste0(ref.set,"_type" ) )
+}
+
+p1 <- DimPlot(data, group.by = "bpe_type", split.by = "stim", label = T)
+plot_grid(p1)
+
+### Labeling cell types in 10x_HCa and DH010101
+FeaturePlot(data, features = c("CD3D", "SELL", "CREM", "CD8A", "GNLY", "CD79A", "FCGR3A", "CCL2", "PPBP"), min.cutoff = "q9")
+data <- RenameIdents(data, `0` = "CD4+ T", `1` = "CD4+ Tcm", `2` = "CD4+ T", `3` = "CD8+ Tcm", `4` = "CD8+ Tem", `5` = "B cells", `6` = "CD14+ Monocytes", `7` = "NK cells", `8` = "CD16 Monocytes", `9` = "HSC", `10` = "DCs", `11` = "plasma")
+
+### Differential expression
+data$dataset <- paste(Idents(data), data$stim, sep = "_")
+data$dataset.stim <- paste(Idents(data), data$stim, sep = "_")
+data$dataset <- Idents(data)
+Idents(data) <- "dataset.stim"
+
+### example differential expression in CD4+ T cells
+cd4diff <- FindMarkers(data, ident.1 = "CD4+ T_DH010101", ident.2 = "CD4+ T_10x_HC_a", verbose = FALSE)
+head(cd4diff, n=15)
+
+
+### Annotate features of Interest
+FeaturePlot(data, features = "IL1B", split.by = "stim")
+
 
 ### Instead of Seurat SCTransform, attempt Harmony
 ```{r}
