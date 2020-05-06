@@ -320,3 +320,20 @@ FeaturePlot(immune.combined, features = c("CD3D", "GNLY", "IFI6"), split.by = "s
     cols = c("grey", "red"))
 ```
 
+
+### Differentially expressed genes 1v5 unstim
+
+unstim_CD4cells <- Seurat::SubsetData(object = data, ident.use = 'B-cells_unstim')
+len <- length(unstim_CD4cells@active.ident)
+
+dataframe <- {}
+for (x in 1:5){
+cd4diff <- FindMarkers(data, ident.1 = "B-cells_stim", ident.2 = "B-cells_unstim", max.cells.per.ident = len, min.pct = 0, logfc.threshold = 0)
+cd4diff <- cbind(rownames(cd4diff), data.frame(cd4diff, row.names = NULL))
+cd4diff$metric <- -log10((cd4diff$p_val)+(10^-305))*cd4diff$avg_logFC
+dataframe <- rbind(dataframe, cd4diff)
+}
+
+colnames(dataframe)[1] <- "X1"
+rank_list <- aggregate(metric ~ X1, dataframe, mean)
+
