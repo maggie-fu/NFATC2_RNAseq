@@ -1,9 +1,7 @@
-# scRNAseq - NFATc2 
+# RNAseq - NFATC2 
 
-The project aims to identify differential expression pattern specific to a patient with NFATc2 mutation.
+The repository contain custom codes for the manuscript "Human germline biallelic complete NFAT1 deficiency causes the triad of severe joint contractures, osteopenia, and B cell malignancy" by Sharma et al. 
 
-*Step 1* Integrate datasets of multiple treatment conditions and sequencing platforms
+The project aims to identify differential expression pattern specific to a patient with NFATC2 mutation.
 
-*Step 2* Compare patient data with healthy controls to identify patient-specific cell type and gene expression changes
-
-*Step 3* Conduct scRNA-seq on a subset of differentially regulated genes in healthy family controls
+The repository includes two RMD files with the analyses performed for condrocyte bulk RNAseq and PBMC scRNAseq. With the raw data we deposited on GEO (GEO accession code) the code will reproduce the data and figures included in the manuscript. 
