@@ -1,0 +1,132 @@
+---
+title: "DE_condrocytes"
+author: "mehul_maggie"
+date: "25/09/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# set work directory
+
+library(limma)
+library(readxl)
+library(dplyr)
+library(pheatmap)
+library(edgeR)
+```
+
+
+## Preprocess and batch correct
+
+```{r}
+#add rawcounts
+rawcounts <- read_excel("rawcounts.xlsx") %>% as.data.frame()
+counts <- as.data.frame(rawcounts)
+rownames(counts) <- counts[,1]
+counts <- counts[,-1]
+
+# Normalized counts
+dge  <-  DGEList(counts, remove.zeros =   TRUE)
+dge  <-  calcNormFactors(object = dge, method = "TMM")
+normCounts  <- cpm(dge, normalized.lib.sizes=TRUE)
+
+y <- as.data.frame(normCounts)
+
+#add design matrix
+design_cpm <- read_excel("design_cpm.xlsx") %>% as.data.frame()
+des <- as.data.frame(design_cpm)
+
+filtergenes <- filterByExpr(normCounts, des, min.count = 0.5, min.total.count = 2, min.prop = 0.7)
+x <- as.data.frame(filtergenes)
+#write.table(filtergenes, "filter.txt")
+
+genes <- rownames(y)
+genes <- as.data.frame(genes)
+
+a <- c(genes,x,y)
+a <- as.data.frame(a)
+
+filtered <- subset(a, filtergenes!="FALSE")
+filtered_norm <- as.data.frame(filtered) 
+
+rownames(filtered_norm) <- filtered_norm[,1]
+filtered_norm <- filtered_norm[,-1]
+filtered_norm_final <- filtered_norm[2:19]
+#write.table(filtered_norm_final, "filter_refined.txt")
+#write.table(filtered_norm_final, "filter_refined.csv")
+
+
+counts_logtrans <-  log2(filtered_norm_final + 1)
+batch <- c("A","B","C","A","B","C","A","B","C","A","B","C","A","B","C","A","B","C")
+batch_correct <- removeBatchEffect(counts_logtrans, batch)
+#write.table(batch_correct, "batch_corrected_good_final.csv")
+```
+
+
+## DE
+
+```{r}
+data <- as.data.frame(batch_correct)
+#rownames(data) <- data[, 1]
+data <- data[, 1:18]
+
+meta <- as.data.frame(colnames(data))
+meta$stim <- gsub(".*_", "", meta$`colnames(data)`) %>% 
+  factor(., levels = c("unstim", "IL1B", "PMAIono"))
+meta$id <- gsub("[0-9].*", "", meta$`colnames(data)`) %>% 
+  factor(., levels = c("Res", "P"))
+meta$day <- gsub("P|Res", "", meta$`colnames(data)`) %>% 
+  gsub("_.*", "", .) %>% 
+  as.factor()
+rownames(meta) <- meta$`colnames(data)`
+meta <- meta[, c("id", "stim", "day")]
+
+# PMA-Ionomycin: Patient vs rescue
+test.met <- meta[meta$stim == "PMAIono", ]
+test.dat <- data[, rownames(test.met)]
+design <- model.matrix(~ id + day, data = test.met)
+fit <- lmFit(test.dat, design)
+fit <- eBayes(fit)
+PMAiono_hits <- topTable(fit, coef = 2, p.value = 0.025, number = 1000) # Patient - Rescue
+#topTable(fit, coef = 3, number = 30) # day2
+#topTable(fit, coef = 4, number = 30) # day3
+
+# IL1B: Patient vs rescue
+test.met <- meta[meta$stim == "IL1B", ]
+test.dat <- data[, rownames(test.met)]
+design <- model.matrix(~ id + day, data = test.met)
+fit <- lmFit(test.dat, design)
+fit <- eBayes(fit)
+IL1B_hits <-topTable(fit, coef = 2, p.value = 0.025, number = 1000) # Patient - Rescue
+#topTable(fit, coef = 3, number = 30) # day2
+#topTable(fit, coef = 4, number = 30) # day3
+
+# Unstim: Patient vs rescue
+test.met <- meta[meta$stim == "unstim", ]
+test.dat <- data[, rownames(test.met)]
+design <- model.matrix(~ id + day, data = test.met)
+fit <- lmFit(test.dat, design)
+fit <- eBayes(fit)
+Unstim_hits <- topTable(fit, coef = 2, p.value = 0.025, number = 1000) # Patient - Rescue
+#topTable(fit, coef = 3, number = 30) # day2
+#topTable(fit, coef = 4, number = 30) # day3
+
+all_genes <- c(rownames(PMAiono_hits), rownames(IL1B_hits), rownames(Unstim_hits)) %>% unique()
+
+#all_genes1 <- c(rownames(PMAiono_hits), rownames(IL1B_hits), rownames(Unstim_hits))
+#write.csv(all_genes1, "test.csv")
+```
+
+
+```{r}
+meta <- meta[c(1:3, 7:9, 4:6, 10:12, 16:18, 13:15),]
+#meta <- meta[c(1:3, 10:12, 7:9, 16:18, 4:6, 13:15), ]
+data <- data[, rownames(meta)]
+colorPalette <- c("blue", "blue", "white", "red", "red")
+colorPalette <- colorRampPalette(colors = colorPalette)(100)
+pheatmap(data[all_genes, ], annotation = meta[, -3], scale = "row", cluster_cols = F, fontsize_row = 12, color = colorPalette, border_color = "white")
+```
+
+
+
+

@@ -1,0 +1,290 @@
+---
+title: "NFAT_snRNAseq"
+output: html_document
+---
+
+## Setup
+
+```{r}
+# set work directory
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(SingleCellExperiment)
+library(SingleR)
+library(cowplot)
+library(ggplot2)
+library(gridExtra)
+```
+
+### Import raw data
+
+```{r}
+stim <- read.delim("MolsPerCell_stim.txt", skip = 7, row.names = 1)
+#stim_new_clusterlabel <- stim[gsub("stim_", "", colnames(data$stim)),]
+#stim_new_clusterlabel <- cbind(stim_new_clusterlabel,data$stim$label)
+
+stim_count <- stim[, 3:ncol(stim)]
+stim_meta <- stim[, 1:2]
+stim_meta$cartrige <- 1
+stim_meta$stim <- "stim"
+stim <- CreateSeuratObject(counts = t(stim_count), project = "NFAT_stim")
+
+#stim_obj <- CreateSeuratObject(counts = t(stim_count), project = "NFAT_stim")
+#stim_obj$sample_tag <- stim$sample_tag
+#stim_obj$sample_tag <- stim$sample_number
+#saveRDS(stim_obj, "stim.rds")
+
+stim <- AddMetaData(stim, metadata = stim_meta)
+
+unstim <- read.delim("MolsPerCell_unsttim.txt", skip = 7, row.names = 1)
+unstim_count <- unstim[, 3:ncol(unstim)]
+unstim_meta <- unstim[, 1:2]
+unstim_meta$cartrige <- 2
+unstim_meta$stim <- "unstim"
+unstim <- CreateSeuratObject(counts = t(unstim_count), project = "NFAT_unstim")
+unstim <- AddMetaData(unstim, metadata = unstim_meta)
+
+comb <- merge(stim, unstim, add.cell.ids = c("stim", "unstim"))
+data <- SplitObject(comb, split.by = "stim")
+data <- lapply(X = data, FUN = function(x) {
+    x <- FindVariableFeatures(x)
+    x <- ScaleData(x)
+    x <- RunPCA(x)
+    x <- RunUMAP(x, dims = 1:30)
+    x <- RunTSNE(x)
+    x <- FindNeighbors(x)
+    x <- FindClusters(x)
+})
+
+```
+
+
+## Cell Cluster Annotation
+
+### Reference-based annotation with SingleR
+
+```{r}
+# Predict cell types based on published reference sets
+stim.sc <- as.SingleCellExperiment(stim, assay = "RNA") # convert to singlecellexperiment object
+unstim.sc <- as.SingleCellExperiment(unstim, assay = "RNA")
+
+#im.ref <- celldex::DatabaseImmuneCellExpressionData()
+nh.ref <- celldex::NovershternHematopoieticData()
+#mon.ref <- celldex::MonacoImmuneData()
+
+ct.pred <- lapply(list(stim.sc, unstim.sc), function(sc){
+  pred.nh <- SingleR(test = sc, ref = nh.ref, labels = nh.ref$label.main)
+  pred.nh.f <- SingleR(test = sc, ref = nh.ref, labels = nh.ref$label.fine)
+  if (identical(rownames(pred.nh), colnames(sc))) {
+    sc$NH <- pred.nh$labels
+    sc$NH.fine <- pred.nh.f$labels
+  }
+  return(sc)
+})
+
+ct <- data.frame(cbind(NH = ct.pred[[1]]$NH,
+                       NH.fine = ct.pred[[1]]$NH.fine)) 
+rownames(ct) <- colnames(data$stim)
+data$stim <- AddMetaData(data$stim, ct)
+ct <- data.frame(cbind(NH = ct.pred[[2]]$NH,
+                       NH.fine = ct.pred[[2]]$NH.fine)) 
+rownames(ct) <- colnames(data$unstim)
+data$unstim <- AddMetaData(data$unstim, ct)
+```
+
+### Clustering analysis with SingleR
+
+#### Manual relabeling of stim data 
+
+```{r}
+### Visual examination of seurat clustering
+# DimPlot(data$stim, label = T, label.size = 4)
+# DimPlot(data$stim, group.by = "NH.fine", label = F, repel = T, label.size = 4)
+#FeaturePlot(data$stim,
+#            features = c("IGHG1", "IGHG2", "IGHG3", "IGHG4"),
+#            label = T, label.size = 4) + NoLegend()
+
+# id <- "dad"
+# p1 <- DimPlot(data$stim[, data$stim$sample_tag == id], label = T, label.size = 4)
+# p2 <- DimPlot(data$stim[, data$stim$sample_tag == id], group.by = "NH.fine", label = F, repel = T, label.size = 4)
+# plot_grid(p1, p2)
+# table(data$stim$NH.fine[data$stim$sample_tag == id])
+#FeaturePlot(data$stim[, data$stim$sample_tag == id],
+#            features = c("IGHG1", "IGHG2", "IGHG3", "IGHG4"),
+#            label = T, label.size = 4) + NoLegend()
+
+
+### Removing some clusters
+table(data$stim$NH.fine)
+data$stim$NH.fine[data$stim$NH.fine == "Mature NK cells_CD56- CD16+ CD3-"] <- "Monocytes"
+data$stim$NH.fine[data$stim$NH.fine %in% c("CD4+ Effector Memory", "CD4+ Central Memory")] <- "CD4+ Memory"
+data$stim$NH.fine[data$stim$NH.fine %in% c("CD8+ Effector Memory", "CD8+ Central Memory", "CD8+ Effector Memory RA")] <- "CD8+ Memory"
+data$stim$NH.fine[data$stim$NH.fine %in% c("Mature NK cells_CD56+ CD16+ CD3-", "Mature NK cells_CD56- CD16- CD3-")] <- "NK cells"
+data$stim$NH.fine[data$stim$NH.fine %in% c("Mature B cells class switched", "Mature B cells class able to switch")] <- "Mature B cells"
+data$stim$keep <- data$stim$NH.fine
+data$stim$keep[data$stim$keep %in% c("CD4+ Memory", "CD8+ Memory", "Mature B cells",
+                                     "NK cells", "Monocytes", "Naive B cells", "Naive CD4+ T cells", "Naive CD8+ T cells")] <- "Y"
+data$stim$keep[data$stim$keep %in% c("Basophils", "Colony Forming Unit-Monocytes", "Eosinophils", "Erythroid_CD34+ CD71+ GlyA-", "Granulocytes (Neutrophils)", 
+                                     "Hematopoietic stem cells_CD133+ CD34dim", "Hematopoietic stem cells_CD38- CD34+", "Megakaryocyte/erythroid progenitors", "NK T cells", 
+                                     "Myeloid Dendritic Cells", "Plasmacytoid Dendritic Cells", "Colony Forming Unit-Granulocytes", "Granulocytes (Neutrophilic Metamyelocytes)")] <- "N"
+test <- data$stim[, data$stim$keep == "Y"]
+
+# p1 <- DimPlot(test, label = T, label.size = 4)
+# p2 <- DimPlot(test, group.by = "NH.fine", label = T, repel = F, label.size = 4) 
+# plot_grid(p1, p2)
+
+### Relabel some clusters
+test$label <- test$NH.fine
+test$label[test$seurat_clusters %in% c("4", "10", "11")] <- "CD8+ Memory"
+test$label[test$seurat_clusters %in% c("3", "6")] <- "CD4+ Memory"
+test$label[test$seurat_clusters == "5" & !test$label %in% c("Naive CD4+ T cells", "Naive CD8+ T cells")] <- "CD4+ Memory"
+test$label[test$seurat_clusters == "9"] <- "NK cells"
+test$label[test$seurat_clusters %in% "7" & !test$label %in% "Naive B cells"] <- "Memory B cells"
+test$label[test$seurat_clusters %in% "2" & !test$label %in% c("Memory B cells", "Mature B cells")] <- "Naive B cells"
+test$label[test$seurat_clusters == "8"] <- "Monocytes"
+test$label[test$seurat_clusters == "12"] <- "Undefined"
+test$label[test$label == "Mature B cells"] <- "Memory B cells"
+test$label[test$seurat_clusters %in% c("0", "1") & !test$label %in% c("Naive CD4+ T cells", "Naive CD8+ T cells")] <- "Naive CD4+ T cells"
+test$label[test$seurat_clusters == "13" & test$label == "Monocytes"] <- "CD4+ Memory"
+
+# p1 <- DimPlot(test, label = T, label.size = 4)
+# p2 <- DimPlot(test, group.by = "label", label = T, repel = F, label.size = 4) 
+# plot_grid(p1, p2)
+table(test$label)
+data$stim <- test
+```
+
+#### Manual relabeling of unstim data
+
+```{r}
+### Visual examination of seurat clustering
+# DimPlot(data$unstim, label = T, label.size = 4)
+# DimPlot(data$unstim, group.by = "NH.fine", label = T, repel = T, label.size = 4)
+# FeaturePlot(data$stim,
+#             features = c("IGHG1", "IGHG2", "IGHG3", "IGHG4"),
+#             label = T, label.size = 4) + NoLegend()
+# 
+# id <- "patient"
+# p1 <- DimPlot(data$unstim[, data$unstim$sample_tag == id], label = T, label.size = 4)
+# p2 <- DimPlot(data$unstim[, data$unstim$sample_tag == id], group.by = "NH.fine", label = F, repel = T, label.size = 4)
+# plot_grid(p1, p2)
+
+### Removing some clusters
+table(data$unstim$NH.fine)
+data$unstim$NH.fine[data$unstim$NH.fine == "Mature NK cells_CD56- CD16+ CD3-"] <- "Monocytes"
+data$unstim$NH.fine[data$unstim$NH.fine %in% c("CD4+ Effector Memory", "CD4+ Central Memory")] <- "CD4+ Memory"
+data$unstim$NH.fine[data$unstim$NH.fine %in% c("CD8+ Effector Memory", "CD8+ Central Memory", "CD8+ Effector Memory RA")] <- "CD8+ Memory"
+data$unstim$NH.fine[data$unstim$NH.fine %in% c("Mature NK cells_CD56+ CD16+ CD3-", "Mature NK cells_CD56- CD16- CD3-")] <- "NK cells"
+data$unstim$NH.fine[data$unstim$NH.fine %in% c("Mature B cells class switched", "Mature B cells class able to switch")] <- "Mature B cells"
+data$unstim$keep <- data$unstim$NH.fine
+data$unstim$keep[data$unstim$keep %in% c("CD4+ Memory", "CD8+ Memory", "Mature B cells", "NK cells", "Monocytes", 
+                                         "Naive B cells", "Naive CD4+ T cells", "Naive CD8+ T cells")] <- "Y"
+data$unstim$keep[data$unstim$keep %in% c("Basophils", "Colony Forming Unit-Monocytes", "Eosinophils", 
+                                         "Erythroid_CD34+ CD71+ GlyA-", "Granulocytes (Neutrophils)",
+                                         "Hematopoietic stem cells_CD133+ CD34dim", "Hematopoietic stem cells_CD38- CD34+", 
+                                         "Megakaryocyte/erythroid progenitors", "NK T cells", "Myeloid Dendritic Cells",
+                                         "Plasmacytoid Dendritic Cells", "Colony Forming Unit-Granulocytes", 
+                                         "Granulocytes (Neutrophilic Metamyelocytes)")] <- "N"
+test <- data$unstim[, data$unstim$keep == "Y"]
+
+test$label <- test$NH.fine
+#test$label[test$seurat_clusters %in% c("9", "13")] <- "Non-naive B cells"
+#test$label[test$label == "Mature B cells"] <- "Non-naive B cells"
+#test$label[test$seurat_clusters == "3"] <- "Naive B cells"
+#test$label[colSums(test[["RNA"]]@data[grep("IGHG", rownames(test)), ]) > 0 & test$label == "Naive B cells"]  <- "Non-naive B cells"
+
+# p1 <- DimPlot(test, label = T, label.size = 4)
+# p2 <- DimPlot(test, group.by = "label", label = T, repel = F, label.size = 4) 
+# plot_grid(p1, p2)
+table(test$label)
+data$unstim <- test
+```
+
+#### Clustering Visualization - Fig 3A
+
+```{r}
+### Define groups for DE comparison, compare clustering
+test <- data$stim
+test$patient <- test$sample_tag # define patient vs others
+test$patient[test$patient != "patient"] <- "hc"
+test$threegroups <- test$sample_tag # define patient vs family vs hc
+test$threegroups[!test$threegroups %in% c("patient", "hc")] <- "family"
+test$twogroups <- test$patient # define patient vs non-patient
+test$twogroups <- factor(test$twogroups, levels = c("hc", "patient"))
+p1 <- DimPlot(test, group.by = "label", label = F, repel = F, label.size = 4, split.by = "twogroups")
+p1[[1]]$layers[[1]]$aes_params$alpha <- 0.3
+p1 # Fig 3A
+```
+
+#### Identify cluster-specific biomarkers
+
+```{r}
+ct.markers <- lapply(data, function(x){
+  # find markers for every cluster compared to all remaining cells, report only the positive ones
+  Idents(x) <- "label"
+  ct.markers <- FindAllMarkers(x, only.pos = T, min.pct = 0.1, logfc.threshold = 0.1)
+  ct.markers.top <- ct.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+  ct.heatmap <- DoHeatmap(x, features = ct.markers.top$gene, size = 4) + NoLegend()
+  return(ct.heatmap)
+})
+```
+
+### Differential expression - Fig 3B, 4A, and 5A
+
+```{r}
+# Differential expression analysis
+NFAT.DE <- lapply(names(data), function(x){
+  # find markers of patient vs hc in each cluster
+  data[[x]]$patient <- data[[x]]$sample_tag # define patient vs others
+  data[[x]]$patient[data[[x]]$patient != "patient"] <- "hc"
+  data[[x]]$celltype.patient <- paste(data[[x]]$label, data[[x]]$patient, sep = "_")
+  Idents(data[[x]]) <- "celltype.patient"
+  out <- lapply(unique(data[[x]]$label), function(ct){
+    NFAT.markers <- FindMarkers(data[[x]], ident.1 = paste0(ct, "_patient"), ident.2 = paste0(ct, "_hc"), 
+                                min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+    write.csv(NFAT.markers, file = paste0("output/", x, "_", ct, ".csv"))
+    return(NFAT.markers)
+  })
+  names(out) <- unique(data[[x]]$label)
+  return(out)
+})
+
+# Exported to graphpad for volcano plot - Fig 3B, 4A, and 5A
+```
+
+### Candidate gene visualization - Fig 3C, 4B, and 5B
+
+```{r}
+data_summary <- function(x) {
+   m <- median(x, na.rm = T)
+   # ymin <- m - sd(x, na.rm = T)
+   # ymax <- m + sd(x, na.rm = T)
+   return(y = m)
+   # return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+### Bcell
+cells <- test[,test$label == "Naive B cells"]
+genes_of_interest <- c("TNFAIP8", "MYC", "HIF1A", "JAK1", "STAT3", "PIKAP1", "LTA", "TNF", "DUSP4")
+p <- VlnPlot(cells, features = "TNFAIP8", group.by = "twogroups", pt.size = 0, cols = c("#2ca030", "#d63a3a")) #plot each gene of interest separately
+p <- p + geom_boxplot(width = 0.13, fill = "white")
+p # Fig 3C
+
+### CD8+ Memory
+cells <- test[,test$label == "CD8+ Memory"]
+genes_of_interest <- c("GZMH", "GNLY", "PFN1", "S100A10", "GZMB", "TIGIT", "FASLG", "IFNG", "TNF")
+p <- VlnPlot(cells, features = "GZMH", group.by = "twogroups", pt.size = 0, cols = c("#2ca030", "#d63a3a")) #plot each gene of interest separately
+p <- p + geom_boxplot(width = 0.13, fill = "white")
+p # Fig 4B
+
+### CD4+ Memory
+cells <- test[,test$label == "CD4+ Memory"]
+genes_of_interest <- c("TNFRSF4", "TIGIT", "S100A10", "REL", "NFKBIA", "NFKBIZ", "CD40LG", "MYC", "TNF")
+DotPlot(cells, features = genes_of_interest, group.by = "sample_tag")
+p <- VlnPlot(cells, features = "TNFRSF4", group.by = "twogroups", pt.size = 0, cols = c("#2ca030", "#d63a3a")) #plot each gene of interest separately
+p <- p + geom_boxplot(width = 0.13, fill = "white")
+p # Fig 5B
+```
+
