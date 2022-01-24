@@ -4,4 +4,4 @@ The repository contain custom codes for the manuscript "Human germline biallelic
 
 The project aims to identify differential expression pattern specific to a patient with NFATC2 mutation.
 
-The repository includes two RMD files with the analyses performed for condrocyte bulk RNAseq and PBMC scRNAseq. With the raw data we deposited on GEO (GSE193415) the code will reproduce the data and figures included in the manuscript. 
+The repository includes two RMD files with the analyses performed for chondrocyte bulk RNAseq and PBMC scRNAseq. With the raw data we deposited on GEO (GSE193415) the code will reproduce the data and figures included in the manuscript. 
